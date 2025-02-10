@@ -43,6 +43,7 @@ import {
   isInstanceDetachable,
   isTreeMatching,
 } from "~/shared/matcher";
+import { getSetting, setSetting } from "./client-settings";
 
 const makeBreakpointCommand = <CommandName extends string>(
   name: CommandName,
@@ -132,7 +133,7 @@ export const deleteSelectedInstance = () => {
     newSelectedInstanceSelector = parentInstanceSelector;
   }
   updateWebstudioData((data) => {
-    if (deleteInstanceMutable(data, selectedInstanceSelector)) {
+    if (deleteInstanceMutable(data, instancePath)) {
       selectInstance(newSelectedInstanceSelector);
     }
   });
@@ -347,6 +348,17 @@ export const { emitCommand, subscribeCommands } = createCommandsEmitter({
           return;
         }
         $activeInspectorPanel.set("style");
+      },
+      disableOnInputLikeControls: true,
+    },
+    {
+      name: "toggleStylePanelFocusMode",
+      defaultHotkeys: ["alt+shift+s"],
+      handler: () => {
+        setSetting(
+          "stylePanelMode",
+          getSetting("stylePanelMode") === "focus" ? "default" : "focus"
+        );
       },
       disableOnInputLikeControls: true,
     },

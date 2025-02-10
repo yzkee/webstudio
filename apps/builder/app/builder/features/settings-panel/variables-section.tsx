@@ -9,7 +9,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuPortal,
   DropdownMenuTrigger,
   Flex,
   Label,
@@ -257,25 +256,23 @@ const VariablesItem = ({
                   onClick={() => {}}
                 />
               </DropdownMenuTrigger>
-              <DropdownMenuPortal>
-                <DropdownMenuContent
-                  css={{ width: theme.spacing[28] }}
-                  onCloseAutoFocus={(event) => event.preventDefault()}
-                >
-                  <DropdownMenuItem onSelect={() => setInspectDialogOpen(true)}>
-                    Inspect
+              <DropdownMenuContent
+                css={{ width: theme.spacing[28] }}
+                onCloseAutoFocus={(event) => event.preventDefault()}
+              >
+                <DropdownMenuItem onSelect={() => setInspectDialogOpen(true)}>
+                  Inspect
+                </DropdownMenuItem>
+                {source === "local" && (
+                  <DropdownMenuItem
+                    // allow to delete only unused variables
+                    disabled={variable.type === "parameter" || usageCount > 0}
+                    onSelect={() => deleteVariable(variable.id)}
+                  >
+                    Delete {usageCount > 0 && `(${usageCount} bindings)`}
                   </DropdownMenuItem>
-                  {source === "local" && (
-                    <DropdownMenuItem
-                      // allow to delete only unused variables
-                      disabled={variable.type === "parameter" || usageCount > 0}
-                      onSelect={() => deleteVariable(variable.id)}
-                    >
-                      Delete {usageCount > 0 && `(${usageCount} bindings)`}
-                    </DropdownMenuItem>
-                  )}
-                </DropdownMenuContent>
-              </DropdownMenuPortal>
+                )}
+              </DropdownMenuContent>
             </DropdownMenu>
           </>
         }
@@ -313,16 +310,15 @@ const VariablesList = () => {
   );
 };
 
+const label = "Data Variables";
+
 export const VariablesSection = () => {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [isOpen, setIsOpen] = useOpenState({
-    label: "variables",
-    isOpenDefault: true,
-  });
+  const [isOpen, setIsOpen] = useOpenState(label);
   return (
     <VariablePopoverProvider value={{ containerRef }}>
       <CollapsibleSectionRoot
-        label="Data Variables"
+        label={label}
         fullWidth={true}
         isOpen={isOpen}
         onOpenChange={setIsOpen}
