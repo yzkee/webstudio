@@ -20,7 +20,6 @@ import {
 } from "~/shared/breakpoints";
 import {
   deleteInstanceMutable,
-  findAvailableDataSources,
   extractWebstudioFragment,
   insertWebstudioFragmentCopy,
   updateWebstudioData,
@@ -37,12 +36,13 @@ import {
 import { $selectedInstancePath, selectInstance } from "~/shared/awareness";
 import { openCommandPanel } from "../features/command-panel";
 import { builderApi } from "~/shared/builder-api";
-
 import {
   findClosestNonTextualContainer,
   isInstanceDetachable,
   isTreeMatching,
 } from "~/shared/matcher";
+import { getSetting, setSetting } from "./client-settings";
+import { findAvailableVariables } from "~/shared/data-variables";
 
 const makeBreakpointCommand = <CommandName extends string>(
   name: CommandName,
@@ -132,7 +132,7 @@ export const deleteSelectedInstance = () => {
     newSelectedInstanceSelector = parentInstanceSelector;
   }
   updateWebstudioData((data) => {
-    if (deleteInstanceMutable(data, selectedInstanceSelector)) {
+    if (deleteInstanceMutable(data, instancePath)) {
       selectInstance(newSelectedInstanceSelector);
     }
   });
@@ -351,6 +351,28 @@ export const { emitCommand, subscribeCommands } = createCommandsEmitter({
       disableOnInputLikeControls: true,
     },
     {
+      name: "toggleStylePanelFocusMode",
+      defaultHotkeys: ["alt+shift+s"],
+      handler: () => {
+        setSetting(
+          "stylePanelMode",
+          getSetting("stylePanelMode") === "focus" ? "default" : "focus"
+        );
+      },
+      disableOnInputLikeControls: true,
+    },
+    {
+      name: "toggleStylePanelAdvancedMode",
+      defaultHotkeys: ["alt+shift+a"],
+      handler: () => {
+        setSetting(
+          "stylePanelMode",
+          getSetting("stylePanelMode") === "advanced" ? "default" : "advanced"
+        );
+      },
+      disableOnInputLikeControls: true,
+    },
+    {
       name: "openSettingsPanel",
       defaultHotkeys: ["d"],
       handler: () => {
@@ -412,11 +434,10 @@ export const { emitCommand, subscribeCommands } = createCommandsEmitter({
           const { newInstanceIds } = insertWebstudioFragmentCopy({
             data,
             fragment,
-            availableDataSources: findAvailableDataSources(
-              data.dataSources,
-              data.instances,
-              parentItem.instanceSelector
-            ),
+            availableVariables: findAvailableVariables({
+              ...data,
+              startingInstanceId: parentItem.instanceSelector[0],
+            }),
           });
           const newRootInstanceId = newInstanceIds.get(
             selectedItem.instance.id

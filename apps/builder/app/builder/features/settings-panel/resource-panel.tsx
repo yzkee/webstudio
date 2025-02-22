@@ -17,6 +17,8 @@ import {
   generateObjectExpression,
   isLiteralExpression,
   parseObjectExpression,
+  SYSTEM_VARIABLE_ID,
+  systemParameter,
 } from "@webstudio-is/sdk";
 import { sitemapResourceUrl } from "@webstudio-is/sdk/runtime";
 import {
@@ -34,7 +36,6 @@ import {
   theme,
 } from "@webstudio-is/design-system";
 import { TrashIcon, InfoCircleIcon, PlusIcon } from "@webstudio-is/icons";
-import { isFeatureEnabled } from "@webstudio-is/feature-flags";
 import { humanizeString } from "~/shared/string-utils";
 import {
   $dataSources,
@@ -54,12 +55,12 @@ import {
 } from "~/builder/shared/code-editor-base";
 import { parseCurl, type CurlRequest } from "./curl";
 import {
-  $selectedInstanceKey,
-  $selectedInstancePath,
+  $selectedInstance,
+  $selectedInstanceKeyWithRoot,
   $selectedPage,
 } from "~/shared/awareness";
 import { updateWebstudioData } from "~/shared/instance-utils";
-import { restoreTreeVariablesMutable } from "~/shared/data-variables";
+import { rebindTreeVariablesMutable } from "~/shared/data-variables";
 
 const validateUrl = (value: string, scope: Record<string, unknown>) => {
   const evaluatedValue = evaluateExpressionWithinScope(value, scope);
@@ -375,7 +376,7 @@ const $hiddenDataSourceIds = computed(
         dataSourceIds.add(dataSource.id);
       }
     }
-    if (page && isFeatureEnabled("filters")) {
+    if (page?.systemDataSourceId) {
       dataSourceIds.delete(page.systemDataSourceId);
     }
     return dataSourceIds;
@@ -384,7 +385,7 @@ const $hiddenDataSourceIds = computed(
 
 const $selectedInstanceScope = computed(
   [
-    $selectedInstanceKey,
+    $selectedInstanceKeyWithRoot,
     $variableValuesByInstanceSelector,
     $dataSources,
     $hiddenDataSourceIds,
@@ -406,7 +407,10 @@ const $selectedInstanceScope = computed(
         if (hiddenDataSourceIds.has(dataSourceId)) {
           continue;
         }
-        const dataSource = dataSources.get(dataSourceId);
+        let dataSource = dataSources.get(dataSourceId);
+        if (dataSourceId === SYSTEM_VARIABLE_ID) {
+          dataSource = systemParameter;
+        }
         if (dataSource === undefined) {
           continue;
         }
@@ -583,11 +587,10 @@ export const ResourceForm = forwardRef<
 
   useImperativeHandle(ref, () => ({
     save: (formData) => {
-      const instancePath = $selectedInstancePath.get();
-      if (instancePath === undefined) {
+      const selectedInstance = $selectedInstance.get();
+      if (selectedInstance === undefined) {
         return;
       }
-      const [{ instance }] = instancePath;
       const name = z.string().parse(formData.get("name"));
       const newResource: Resource = {
         id: resource?.id ?? nanoid(),
@@ -600,7 +603,7 @@ export const ResourceForm = forwardRef<
       const newVariable: DataSource = {
         id: variable?.id ?? nanoid(),
         // preserve existing instance scope when edit
-        scopeInstanceId: variable?.scopeInstanceId ?? instance.id,
+        scopeInstanceId: variable?.scopeInstanceId ?? selectedInstance.id,
         name,
         type: "resource",
         resourceId: newResource.id,
@@ -608,7 +611,8 @@ export const ResourceForm = forwardRef<
       updateWebstudioData((data) => {
         data.dataSources.set(newVariable.id, newVariable);
         data.resources.set(newResource.id, newResource);
-        restoreTreeVariablesMutable({ instancePath, ...data });
+        const startingInstanceId = selectedInstance.id;
+        rebindTreeVariablesMutable({ startingInstanceId, ...data });
       });
     },
   }));
@@ -715,11 +719,10 @@ export const SystemResourceForm = forwardRef<
 
   useImperativeHandle(ref, () => ({
     save: (formData) => {
-      const instancePath = $selectedInstancePath.get();
-      if (instancePath === undefined) {
+      const selectedInstance = $selectedInstance.get();
+      if (selectedInstance === undefined) {
         return;
       }
-      const [{ instance }] = instancePath;
       const name = z.string().parse(formData.get("name"));
       const newResource: Resource = {
         id: resource?.id ?? nanoid(),
@@ -732,7 +735,7 @@ export const SystemResourceForm = forwardRef<
       const newVariable: DataSource = {
         id: variable?.id ?? nanoid(),
         // preserve existing instance scope when edit
-        scopeInstanceId: variable?.scopeInstanceId ?? instance.id,
+        scopeInstanceId: variable?.scopeInstanceId ?? selectedInstance.id,
         name,
         type: "resource",
         resourceId: newResource.id,
@@ -740,7 +743,8 @@ export const SystemResourceForm = forwardRef<
       updateWebstudioData((data) => {
         data.dataSources.set(newVariable.id, newVariable);
         data.resources.set(newResource.id, newResource);
-        restoreTreeVariablesMutable({ instancePath, ...data });
+        const startingInstanceId = selectedInstance.id;
+        rebindTreeVariablesMutable({ startingInstanceId, ...data });
       });
     },
   }));
@@ -824,11 +828,10 @@ export const GraphqlResourceForm = forwardRef<
 
   useImperativeHandle(ref, () => ({
     save: (formData) => {
-      const instancePath = $selectedInstancePath.get();
-      if (instancePath === undefined) {
+      const selectedInstance = $selectedInstance.get();
+      if (selectedInstance === undefined) {
         return;
       }
-      const [{ instance }] = instancePath;
       const name = z.string().parse(formData.get("name"));
       const body = generateObjectExpression(
         new Map([
@@ -848,7 +851,7 @@ export const GraphqlResourceForm = forwardRef<
       const newVariable: DataSource = {
         id: variable?.id ?? nanoid(),
         // preserve existing instance scope when edit
-        scopeInstanceId: variable?.scopeInstanceId ?? instance.id,
+        scopeInstanceId: variable?.scopeInstanceId ?? selectedInstance.id,
         name,
         type: "resource",
         resourceId: newResource.id,
@@ -856,7 +859,8 @@ export const GraphqlResourceForm = forwardRef<
       updateWebstudioData((data) => {
         data.dataSources.set(newVariable.id, newVariable);
         data.resources.set(newResource.id, newResource);
-        restoreTreeVariablesMutable({ instancePath, ...data });
+        const startingInstanceId = selectedInstance.id;
+        rebindTreeVariablesMutable({ startingInstanceId, ...data });
       });
     },
   }));

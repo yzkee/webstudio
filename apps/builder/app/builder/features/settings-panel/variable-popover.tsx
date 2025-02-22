@@ -44,6 +44,7 @@ import {
   type DataSource,
   transpileExpression,
   lintExpression,
+  SYSTEM_VARIABLE_ID,
 } from "@webstudio-is/sdk";
 import {
   ExpressionEditor,
@@ -59,7 +60,7 @@ import {
   $instances,
   $props,
 } from "~/shared/nano-states";
-import { $selectedInstance, $selectedInstancePath } from "~/shared/awareness";
+import { $selectedInstance } from "~/shared/awareness";
 import { BindingPopoverProvider } from "~/builder/shared/binding-popover";
 import {
   EditorDialog,
@@ -75,7 +76,7 @@ import { generateCurl } from "./curl";
 import { updateWebstudioData } from "~/shared/instance-utils";
 import {
   findUnsetVariableNames,
-  restoreTreeVariablesMutable,
+  rebindTreeVariablesMutable,
 } from "~/shared/data-variables";
 
 const $variablesByName = computed(
@@ -92,13 +93,13 @@ const $variablesByName = computed(
 );
 
 const $unsetVariableNames = computed(
-  [$selectedInstancePath, $instances, $props, $dataSources, $resources],
-  (instancePath, instances, props, dataSources, resources) => {
-    if (instancePath === undefined) {
+  [$selectedInstance, $instances, $props, $dataSources, $resources],
+  (selectedInstance, instances, props, dataSources, resources) => {
+    if (selectedInstance === undefined) {
       return [];
     }
     return findUnsetVariableNames({
-      instancePath,
+      startingInstanceId: selectedInstance.id,
       instances,
       props,
       dataSources,
@@ -288,8 +289,8 @@ const ParameterForm = forwardRef<
 >(({ variable }, ref) => {
   useImperativeHandle(ref, () => ({
     save: (formData) => {
-      const instancePath = $selectedInstancePath.get();
-      if (instancePath === undefined) {
+      const selectedInstance = $selectedInstance.get();
+      if (selectedInstance === undefined) {
         return;
       }
       // only existing parameter variables can be renamed
@@ -299,7 +300,8 @@ const ParameterForm = forwardRef<
       const name = z.string().parse(formData.get("name"));
       updateWebstudioData((data) => {
         data.dataSources.set(variable.id, { ...variable, name });
-        restoreTreeVariablesMutable({ instancePath, ...data });
+        const startingInstanceId = selectedInstance.id;
+        rebindTreeVariablesMutable({ startingInstanceId, ...data });
       });
     },
   }));
@@ -318,11 +320,10 @@ const useValuePanelRef = ({
 }) => {
   useImperativeHandle(ref, () => ({
     save: (formData) => {
-      const instancePath = $selectedInstancePath.get();
-      if (instancePath === undefined) {
+      const selectedInstance = $selectedInstance.get();
+      if (selectedInstance === undefined) {
         return;
       }
-      const [{ instance: selectedInstance }] = instancePath;
       const dataSourceId = variable?.id ?? nanoid();
       // preserve existing instance scope when edit
       const scopeInstanceId = variable?.scopeInstanceId ?? selectedInstance.id;
@@ -339,7 +340,8 @@ const useValuePanelRef = ({
           type: "variable",
           value: variableValue,
         });
-        restoreTreeVariablesMutable({ instancePath, ...data });
+        const startingInstanceId = selectedInstance.id;
+        rebindTreeVariablesMutable({ startingInstanceId, ...data });
       });
     },
   }));
@@ -734,6 +736,7 @@ export const VariablePopoverTrigger = ({
   const { allowDynamicData } = useStore($userPlanFeatures);
   const [isResource, setIsResource] = useState(variable?.type === "resource");
   const requiresUpgrade = allowDynamicData === false && isResource;
+  const isSystemVariable = variable?.id === SYSTEM_VARIABLE_ID;
 
   return (
     <FloatingPanel
@@ -855,7 +858,7 @@ export const VariablePopoverTrigger = ({
               }}
               onSubmit={(event) => {
                 event.preventDefault();
-                if (requiresUpgrade) {
+                if (requiresUpgrade || isSystemVariable) {
                   return;
                 }
                 const nameElement =
@@ -878,11 +881,17 @@ export const VariablePopoverTrigger = ({
             >
               {/* submit is not triggered when press enter on input without submit button */}
               <button hidden></button>
-              <BindingPopoverProvider
-                value={{ containerRef: bindingPopoverContainerRef }}
+              <fieldset
+                style={{ display: "contents" }}
+                // forbid editing system variable
+                disabled={isSystemVariable}
               >
-                <VariablePanel ref={panelRef} variable={variable} />
-              </BindingPopoverProvider>
+                <BindingPopoverProvider
+                  value={{ containerRef: bindingPopoverContainerRef }}
+                >
+                  <VariablePanel ref={panelRef} variable={variable} />
+                </BindingPopoverProvider>
+              </fieldset>
             </form>
           </Flex>
         </ScrollArea>
