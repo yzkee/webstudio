@@ -13,18 +13,20 @@ import {
   $instances,
   $registeredComponentMetas,
 } from "../nano-states";
-import type { InstanceSelector, DroppableTarget } from "../tree-utils";
+import type { InstanceSelector } from "../tree-utils";
 import {
   deleteInstanceMutable,
-  findAvailableDataSources,
   extractWebstudioFragment,
   insertWebstudioFragmentCopy,
   updateWebstudioData,
   getWebstudioData,
   insertInstanceChildrenMutable,
   findClosestInsertable,
+  type Insertable,
 } from "../instance-utils";
 import { isInstanceDetachable } from "../matcher";
+import { $selectedInstancePath } from "../awareness";
+import { findAvailableVariables } from "../data-variables";
 
 const version = "@webstudio/instance/v0.1";
 
@@ -90,7 +92,7 @@ export const getPortalFragmentSelector = (
   return [instance.children[0].value, ...instanceSelector];
 };
 
-const findPasteTarget = (data: InstanceData): undefined | DroppableTarget => {
+const findPasteTarget = (data: InstanceData): undefined | Insertable => {
   const instances = $instances.get();
 
   const instanceSelector = $selectedInstanceSelector.get();
@@ -171,11 +173,10 @@ export const onPaste = (clipboardData: string) => {
     const { newInstanceIds } = insertWebstudioFragmentCopy({
       data,
       fragment,
-      availableDataSources: findAvailableDataSources(
-        data.dataSources,
-        data.instances,
-        pasteTarget.parentSelector
-      ),
+      availableVariables: findAvailableVariables({
+        ...data,
+        startingInstanceId: pasteTarget.parentSelector[0],
+      }),
     });
     const newRootInstanceId = newInstanceIds.get(fragment.instances[0].id);
     if (newRootInstanceId === undefined) {
@@ -203,20 +204,20 @@ export const onCopy = () => {
 };
 
 export const onCut = () => {
-  const selectedInstanceSelector = $selectedInstanceSelector.get();
-  if (selectedInstanceSelector === undefined) {
+  const instancePath = $selectedInstancePath.get();
+  if (instancePath === undefined) {
     return;
   }
   // @todo tell user they can't delete root
-  if (selectedInstanceSelector.length === 1) {
+  if (instancePath.length === 1) {
     return;
   }
-  const data = getTreeData(selectedInstanceSelector);
+  const data = getTreeData(instancePath[0].instanceSelector);
   if (data === undefined) {
     return;
   }
   updateWebstudioData((data) => {
-    deleteInstanceMutable(data, selectedInstanceSelector);
+    deleteInstanceMutable(data, instancePath);
   });
   if (data === undefined) {
     return;

@@ -6,10 +6,14 @@ import {
   css,
   CssValueListArrowFocus,
   CssValueListItem,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuPortal,
   DropdownMenuTrigger,
   Flex,
   Label,
@@ -22,18 +26,15 @@ import {
 } from "@webstudio-is/design-system";
 import { EllipsesIcon, PlusIcon } from "@webstudio-is/icons";
 import type { DataSource } from "@webstudio-is/sdk";
-import {
-  decodeDataSourceVariable,
-  getExpressionIdentifiers,
-} from "@webstudio-is/sdk";
+import { findPageByIdOrPath } from "@webstudio-is/sdk";
 import {
   $dataSources,
   $instances,
+  $pages,
   $props,
   $resources,
   $variableValuesByInstanceSelector,
 } from "~/shared/nano-states";
-import { serverSyncStore } from "~/shared/sync";
 import {
   CollapsibleSectionRoot,
   useOpenState,
@@ -48,131 +49,62 @@ import {
 } from "./variable-popover";
 import {
   $selectedInstance,
-  $selectedInstanceKey,
-  $selectedInstancePath,
+  $selectedInstanceKeyWithRoot,
   $selectedPage,
 } from "~/shared/awareness";
+import { updateWebstudioData } from "~/shared/instance-utils";
+import {
+  deleteVariableMutable,
+  findAvailableVariables,
+  findUsedVariables,
+} from "~/shared/data-variables";
 
 /**
  * find variables defined specifically on this selected instance
  */
 const $availableVariables = computed(
-  [$selectedInstancePath, $dataSources],
-  (instancePath, dataSources) => {
-    if (instancePath === undefined) {
+  [$selectedInstance, $instances, $dataSources],
+  (selectedInstance, instances, dataSources) => {
+    if (selectedInstance === undefined) {
       return [];
     }
-    const [{ instanceSelector }] = instancePath;
-    const [selectedInstanceId] = instanceSelector;
-    const availableVariables = new Map<DataSource["name"], DataSource>();
-    // order from ancestor to descendant
-    // so descendants can override ancestor variables
-    for (const { instance } of instancePath.slice().reverse()) {
-      for (const dataSource of dataSources.values()) {
-        if (dataSource.scopeInstanceId === instance.id) {
-          availableVariables.set(dataSource.name, dataSource);
-        }
-      }
-    }
+    const availableVariables = findAvailableVariables({
+      startingInstanceId: selectedInstance.id,
+      instances,
+      dataSources,
+    });
     // order local variables first
     return Array.from(availableVariables.values()).sort((left, right) => {
-      const leftRank = left.scopeInstanceId === selectedInstanceId ? 0 : 1;
-      const rightRank = right.scopeInstanceId === selectedInstanceId ? 0 : 1;
+      const leftRank = left.scopeInstanceId === selectedInstance.id ? 0 : 1;
+      const rightRank = right.scopeInstanceId === selectedInstance.id ? 0 : 1;
       return leftRank - rightRank;
     });
   }
 );
 
 const $instanceVariableValues = computed(
-  [$selectedInstanceKey, $variableValuesByInstanceSelector],
+  [$selectedInstanceKeyWithRoot, $variableValuesByInstanceSelector],
   (instanceKey, variableValuesByInstanceSelector) =>
     variableValuesByInstanceSelector.get(instanceKey ?? "") ??
     new Map<string, unknown>()
 );
 
-/**
- * find variables used in
- *
- * instance children
- * expression prop
- * action prop
- * url resource field
- * header resource field
- * body resource fiel
- */
 const $usedVariables = computed(
-  [$instances, $props, $resources, $selectedPage],
-  (instances, props, resources, page) => {
-    const usedVariables = new Map<DataSource["id"], number>();
-    const collectExpressionVariables = (expression: string) => {
-      const identifiers = getExpressionIdentifiers(expression);
-      for (const identifier of identifiers) {
-        const id = decodeDataSourceVariable(identifier);
-        if (id !== undefined) {
-          const count = usedVariables.get(id) ?? 0;
-          usedVariables.set(id, count + 1);
-        }
-      }
-    };
-    for (const instance of instances.values()) {
-      for (const child of instance.children) {
-        if (child.type === "expression") {
-          collectExpressionVariables(child.value);
-        }
-      }
+  [$selectedInstance, $pages, $instances, $props, $dataSources, $resources],
+  (selectedInstance, pages, instances, props, dataSources, resources) => {
+    if (selectedInstance === undefined) {
+      return new Map<DataSource["id"], number>();
     }
-    for (const resource of resources.values()) {
-      collectExpressionVariables(resource.url);
-      for (const { value } of resource.headers) {
-        collectExpressionVariables(value);
-      }
-      if (resource.body) {
-        collectExpressionVariables(resource.body);
-      }
-    }
-    for (const prop of props.values()) {
-      if (prop.type === "expression") {
-        collectExpressionVariables(prop.value);
-      }
-      if (prop.type === "action") {
-        for (const value of prop.value) {
-          collectExpressionVariables(value.code);
-        }
-      }
-    }
-    if (page) {
-      collectExpressionVariables(page.title);
-      collectExpressionVariables(page.meta.description ?? "");
-      collectExpressionVariables(page.meta.excludePageFromSearch ?? "");
-      collectExpressionVariables(page.meta.socialImageUrl ?? "");
-      collectExpressionVariables(page.meta.language ?? "");
-      collectExpressionVariables(page.meta.status ?? "");
-      collectExpressionVariables(page.meta.redirect ?? "");
-      if (page.meta.custom) {
-        for (const { content } of page.meta.custom) {
-          collectExpressionVariables(content);
-        }
-      }
-    }
-    return usedVariables;
+    return findUsedVariables({
+      startingInstanceId: selectedInstance.id,
+      pages,
+      instances,
+      props,
+      dataSources,
+      resources,
+    });
   }
 );
-
-const deleteVariable = (variableId: DataSource["id"]) => {
-  serverSyncStore.createTransaction(
-    [$dataSources, $resources],
-    (dataSources, resources) => {
-      const dataSource = dataSources.get(variableId);
-      if (dataSource === undefined) {
-        return;
-      }
-      dataSources.delete(variableId);
-      if (dataSource.type === "resource") {
-        resources.delete(dataSource.resourceId);
-      }
-    }
-  );
-};
 
 const EmptyVariables = () => {
   return (
@@ -212,8 +144,10 @@ const VariablesItem = ({
   value: unknown;
   usageCount: number;
 }) => {
+  const selectedPage = useStore($selectedPage);
   const [inspectDialogOpen, setInspectDialogOpen] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   return (
     <VariablePopoverTrigger key={variable.id} variable={variable}>
       <CssValueListItem
@@ -244,6 +178,7 @@ const VariablesItem = ({
             >
               {undefined}
             </ValuePreviewDialog>
+
             <DropdownMenu modal onOpenChange={setIsMenuOpen}>
               <DropdownMenuTrigger asChild>
                 {/* a11y is completely broken here
@@ -257,26 +192,77 @@ const VariablesItem = ({
                   onClick={() => {}}
                 />
               </DropdownMenuTrigger>
-              <DropdownMenuPortal>
-                <DropdownMenuContent
-                  css={{ width: theme.spacing[28] }}
-                  onCloseAutoFocus={(event) => event.preventDefault()}
-                >
-                  <DropdownMenuItem onSelect={() => setInspectDialogOpen(true)}>
-                    Inspect
+              <DropdownMenuContent
+                css={{ width: theme.spacing[28] }}
+                onCloseAutoFocus={(event) => event.preventDefault()}
+              >
+                <DropdownMenuItem onSelect={() => setInspectDialogOpen(true)}>
+                  Inspect
+                </DropdownMenuItem>
+                {source === "local" && variable.type !== "parameter" && (
+                  <DropdownMenuItem
+                    onSelect={() => {
+                      if (usageCount > 0) {
+                        setIsDeleteDialogOpen(true);
+                      } else {
+                        updateWebstudioData((data) => {
+                          deleteVariableMutable(data, variable.id);
+                        });
+                      }
+                    }}
+                  >
+                    Delete {usageCount > 0 && `(${usageCount} bindings)`}
                   </DropdownMenuItem>
-                  {source === "local" && (
+                )}
+                {source === "local" &&
+                  variable.id === selectedPage?.systemDataSourceId && (
                     <DropdownMenuItem
-                      // allow to delete only unused variables
-                      disabled={variable.type === "parameter" || usageCount > 0}
-                      onSelect={() => deleteVariable(variable.id)}
+                      onSelect={() => {
+                        updateWebstudioData((data) => {
+                          const page = findPageByIdOrPath(
+                            selectedPage.id,
+                            data.pages
+                          );
+                          delete page?.systemDataSourceId;
+                          deleteVariableMutable(data, variable.id);
+                        });
+                      }}
                     >
-                      Delete {usageCount > 0 && `(${usageCount} bindings)`}
+                      Delete
                     </DropdownMenuItem>
                   )}
-                </DropdownMenuContent>
-              </DropdownMenuPortal>
+              </DropdownMenuContent>
             </DropdownMenu>
+
+            <Dialog
+              open={isDeleteDialogOpen}
+              onOpenChange={setIsDeleteDialogOpen}
+            >
+              <DialogContent>
+                <DialogTitle>Delete Variable?</DialogTitle>
+                <DialogDescription
+                  className={css({
+                    paddingInline: theme.panel.paddingInline,
+                    textWrap: "nowrap",
+                  }).toString()}
+                >
+                  Variable "{variable.name}" is used in {usageCount}&nbsp;
+                  {usageCount === 1 ? "expression" : "expressions"}.
+                </DialogDescription>
+                <DialogActions>
+                  <Button
+                    color="destructive"
+                    onClick={() => {
+                      updateWebstudioData((data) => {
+                        deleteVariableMutable(data, variable.id);
+                      });
+                    }}
+                  >
+                    Delete
+                  </Button>
+                </DialogActions>
+              </DialogContent>
+            </Dialog>
           </>
         }
       />
@@ -313,16 +299,15 @@ const VariablesList = () => {
   );
 };
 
+const label = "Data Variables";
+
 export const VariablesSection = () => {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [isOpen, setIsOpen] = useOpenState({
-    label: "variables",
-    isOpenDefault: true,
-  });
+  const [isOpen, setIsOpen] = useOpenState(label);
   return (
     <VariablePopoverProvider value={{ containerRef }}>
       <CollapsibleSectionRoot
-        label="Data Variables"
+        label={label}
         fullWidth={true}
         isOpen={isOpen}
         onOpenChange={setIsOpen}

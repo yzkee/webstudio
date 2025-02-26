@@ -40,6 +40,7 @@ import {
   $selectedInstancePathWithRoot,
   type InstancePath,
 } from "~/shared/awareness";
+import type { InstanceSelector } from "~/shared/tree-utils";
 
 const $presetStyles = computed($registeredComponentMetas, (metas) => {
   const presetStyles = new Map<string, StyleValue>();
@@ -139,19 +140,22 @@ export const getDefinedStyles = ({
   styleSourceSelections: StyleSourceSelections;
   styles: Styles;
 }) => {
-  const definedStyles = new Set<{
-    property: StyleProperty;
-    listed?: boolean;
-  }>();
   const inheritedStyleSources = new Set();
   const instanceStyleSources = new Set();
   const matchingBreakpoints = new Set(matchingBreakpointsArray);
   const startingInstanceSelector = instancePath[0].instanceSelector;
+
+  type StyleDeclSubset = Pick<StyleDecl, "property" | "listed" | "value">;
+
+  const instanceStyles = new Set<StyleDeclSubset>();
+  const inheritedStyles = new Set<StyleDeclSubset>();
+  const presetStyles = new Set<StyleDeclSubset>();
+
   for (const { instance } of instancePath) {
     const meta = metas.get(instance.component);
-    for (const presetStyles of Object.values(meta?.presetStyle ?? {})) {
-      for (const styleDecl of presetStyles) {
-        definedStyles.add(styleDecl);
+    for (const preset of Object.values(meta?.presetStyle ?? {})) {
+      for (const styleDecl of preset) {
+        presetStyles.add(styleDecl);
       }
     }
     const styleSources = styleSourceSelections.get(instance.id)?.values;
@@ -170,7 +174,7 @@ export const getDefinedStyles = ({
       matchingBreakpoints.has(styleDecl.breakpointId) &&
       instanceStyleSources.has(styleDecl.styleSourceId)
     ) {
-      definedStyles.add(styleDecl);
+      instanceStyles.add(styleDecl);
     }
     const inherited =
       properties[styleDecl.property as keyof typeof properties]?.inherited ??
@@ -181,10 +185,20 @@ export const getDefinedStyles = ({
       inheritedStyleSources.has(styleDecl.styleSourceId) &&
       inherited
     ) {
-      definedStyles.add(styleDecl);
+      inheritedStyles.add(styleDecl);
     }
   }
-  return definedStyles;
+
+  // We are sorting by alphabet within each group.
+  const sortByProperty = (a: { property: string }, b: { property: string }) => {
+    return Intl.Collator().compare(a.property, b.property);
+  };
+
+  return new Set([
+    ...Array.from(instanceStyles).sort(sortByProperty),
+    ...Array.from(inheritedStyles).sort(sortByProperty),
+    ...Array.from(presetStyles).sort(sortByProperty),
+  ]);
 };
 
 export const $definedStyles = computed(
@@ -240,6 +254,10 @@ const $model = computed(
   }
 );
 
+/**
+ * Will be deleted along with CSS Preview.
+ * @deprecated
+ */
 export const $definedComputedStyles = computed(
   [
     $definedStyles,
@@ -357,6 +375,17 @@ export const useParentComputedStyleDecl = (property: StyleProperty) => {
     [property]
   );
   return useStore($store);
+};
+
+export const getInstanceStyleDecl = (
+  property: StyleProperty,
+  instanceSelector: InstanceSelector
+) => {
+  return getComputedStyleDecl({
+    model: $model.get(),
+    instanceSelector,
+    property,
+  });
 };
 
 export const useComputedStyles = (properties: StyleProperty[]) => {

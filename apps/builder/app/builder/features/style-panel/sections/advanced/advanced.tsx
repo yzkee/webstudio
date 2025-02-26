@@ -1,47 +1,40 @@
-import { lexer } from "css-tree";
+import { mergeRefs } from "@react-aria/utils";
+import { flushSync } from "react-dom";
 import { colord } from "colord";
 import {
   memo,
   useEffect,
-  useMemo,
   useRef,
   useState,
+  type ChangeEvent,
+  type ComponentProps,
   type ReactNode,
+  type RefObject,
 } from "react";
 import { useStore } from "@nanostores/react";
-import { computed } from "nanostores";
 import { matchSorter } from "match-sorter";
 import { PlusIcon } from "@webstudio-is/icons";
 import {
   Box,
-  ComboboxAnchor,
-  ComboboxContent,
-  ComboboxItemDescription,
-  ComboboxListbox,
-  ComboboxListboxItem,
-  ComboboxRoot,
-  ComboboxScrollArea,
   Flex,
-  InputField,
   Label,
-  NestedInputButton,
+  SearchField,
   SectionTitle,
   SectionTitleButton,
   SectionTitleLabel,
+  Separator,
   Text,
   theme,
   Tooltip,
-  useCombobox,
 } from "@webstudio-is/design-system";
 import {
-  parseCss,
-  properties as propertiesData,
+  camelCaseProperty,
   propertyDescriptions,
 } from "@webstudio-is/css-data";
 import {
   hyphenateProperty,
   toValue,
-  type StyleProperty,
+  type CssProperty,
 } from "@webstudio-is/css-engine";
 import {
   CollapsibleSectionRoot,
@@ -56,40 +49,38 @@ import {
 } from "../../shared/use-style-data";
 import {
   $availableVariables,
-  $matchingBreakpoints,
-  getDefinedStyles,
   useComputedStyleDecl,
   useComputedStyles,
 } from "../../shared/model";
 import { getDots } from "../../shared/style-section";
 import { PropertyInfo } from "../../property-label";
-import { sections } from "../sections";
 import { ColorPopover } from "../../shared/color-picker";
-import {
-  $registeredComponentMetas,
-  $styles,
-  $styleSourceSelections,
-} from "~/shared/nano-states";
 import { useClientSupports } from "~/shared/client-supports";
-import { $selectedInstancePath } from "~/shared/awareness";
+import { CopyPasteMenu, copyAttribute } from "./copy-paste-menu";
+import { $advancedStylesLonghands } from "./stores";
+import { $settings } from "~/builder/shared/client-settings";
+import { AddStyleInput } from "./add-style-input";
+import { parseStyleInput } from "./parse-style-input";
+import { $selectedInstanceKey } from "~/shared/awareness";
 
 // Only here to keep the same section module interface
 export const properties = [];
 
 const AdvancedStyleSection = (props: {
   label: string;
-  properties: StyleProperty[];
+  properties: Array<CssProperty>;
   onAdd: () => void;
   children: ReactNode;
 }) => {
   const { label, children, properties, onAdd } = props;
-  const [isOpen, setIsOpen] = useOpenState(props);
-  const styles = useComputedStyles(properties);
+  const [isOpen, setIsOpen] = useOpenState(label);
+  const styles = useComputedStyles(properties.map(camelCaseProperty));
   return (
     <CollapsibleSectionRoot
       label={label}
       isOpen={isOpen}
       onOpenChange={setIsOpen}
+      fullWidth
       trigger={
         <SectionTitle
           dots={getDots(styles)}
@@ -112,155 +103,34 @@ const AdvancedStyleSection = (props: {
   );
 };
 
-type SearchItem = { value: string; label: string };
-
-const matchOrSuggestToCreate = (
-  search: string,
-  items: Array<SearchItem>,
-  itemToString: (item: SearchItem) => string
-) => {
-  const matched = matchSorter(items, search, {
-    keys: [itemToString],
-  });
-  const propertyName = search.trim();
-  if (
-    propertyName.startsWith("--") &&
-    lexer.match("<custom-ident>", propertyName).matched
-  ) {
-    matched.unshift({
-      value: propertyName,
-      label: `Create "${propertyName}"`,
-    });
-  }
-  return matched;
-};
-
-const getNewPropertyDescription = (item: null | SearchItem) => {
-  let description: string | undefined = `Create CSS variable.`;
-  if (item && item.value in propertyDescriptions) {
-    description = propertyDescriptions[item.value];
-  }
-  return <Box css={{ width: theme.spacing[28] }}>{description}</Box>;
-};
-
-const insertStyles = (text: string) => {
-  const parsedStyles = parseCss(`selector{${text}}`);
-  if (parsedStyles.length === 0) {
-    return false;
+const insertStyles = (css: string) => {
+  const styleMap = parseStyleInput(css);
+  if (styleMap.size === 0) {
+    return new Map();
   }
   const batch = createBatchUpdate();
-  for (const { property, value } of parsedStyles) {
-    batch.setProperty(property)(value);
+  for (const [property, value] of styleMap) {
+    batch.setProperty(camelCaseProperty(property as CssProperty))(value);
   }
   batch.publish({ listed: true });
-  return true;
+  return styleMap;
 };
 
-/**
- *
- * Advanced search control supports following interactions
- *
- * find property
- * create custom property
- * submit css declarations
- * paste css declarations
- *
- */
-const AdvancedSearch = ({
-  usedProperties,
-  onSelect,
-  onClose,
+// Used to indent the values when they are on the next line. This way its easier to see
+// where the property ends and value begins, especially in case of presets.
+const initialIndentation = `20px`;
+
+const AdvancedPropertyLabel = ({
+  property,
+  onReset,
 }: {
-  usedProperties: string[];
-  onSelect: (value: StyleProperty) => void;
-  onClose: () => void;
+  property: CssProperty;
+  onReset?: () => void;
 }) => {
-  const availableProperties = useMemo(() => {
-    const properties = Object.keys(propertiesData).sort(
-      Intl.Collator().compare
-    ) as StyleProperty[];
-    const availableProperties: SearchItem[] = [];
-    for (const property of properties) {
-      if (usedProperties.includes(property) === false) {
-        availableProperties.push({
-          value: property,
-          label: hyphenateProperty(property),
-        });
-      }
-    }
-    return availableProperties;
-  }, [usedProperties]);
-  const [item, setItem] = useState<SearchItem>({
-    value: "",
-    label: "",
-  });
-
-  const combobox = useCombobox<SearchItem>({
-    getItems: () => availableProperties,
-    itemToString: (item) => item?.label ?? "",
-    value: item,
-    defaultHighlightedIndex: 0,
-    getItemProps: () => ({ text: "sentence" }),
-    match: matchOrSuggestToCreate,
-    onChange: (value) => setItem({ value: value ?? "", label: value ?? "" }),
-    onItemSelect: (item) => onSelect(item.value as StyleProperty),
-  });
-
-  const descriptionItem = combobox.items[combobox.highlightedIndex];
-  const description = getNewPropertyDescription(descriptionItem);
-  const descriptions = combobox.items.map(getNewPropertyDescription);
-
-  return (
-    <ComboboxRoot open={combobox.isOpen}>
-      <form
-        {...combobox.getComboboxProps()}
-        onSubmit={(event) => {
-          event.preventDefault();
-          const isInserted = insertStyles(item.value);
-          if (isInserted) {
-            onClose();
-          }
-        }}
-      >
-        <input type="submit" hidden />
-        <ComboboxAnchor>
-          <InputField
-            {...combobox.getInputProps()}
-            autoFocus={true}
-            placeholder="Add styles"
-            suffix={<NestedInputButton {...combobox.getToggleButtonProps()} />}
-          />
-        </ComboboxAnchor>
-        <ComboboxContent>
-          <ComboboxListbox {...combobox.getMenuProps()}>
-            <ComboboxScrollArea>
-              {combobox.items.map((item, index) => (
-                <ComboboxListboxItem
-                  {...combobox.getItemProps({ item, index })}
-                  key={index}
-                >
-                  {item.label}
-                </ComboboxListboxItem>
-              ))}
-            </ComboboxScrollArea>
-            {description && (
-              <ComboboxItemDescription descriptions={descriptions}>
-                {description}
-              </ComboboxItemDescription>
-            )}
-          </ComboboxListbox>
-        </ComboboxContent>
-      </form>
-    </ComboboxRoot>
-  );
-};
-
-const AdvancedPropertyLabel = ({ property }: { property: StyleProperty }) => {
-  const styleDecl = useComputedStyleDecl(property);
+  const camelCasedProperty = camelCaseProperty(property);
+  const styleDecl = useComputedStyleDecl(camelCasedProperty);
   const label = hyphenateProperty(property);
   const description = propertyDescriptions[property];
-  const color =
-    styleDecl.source.name === "default" ? "code" : styleDecl.source.name;
   const [isOpen, setIsOpen] = useState(false);
   return (
     <Tooltip
@@ -272,7 +142,8 @@ const AdvancedPropertyLabel = ({ property }: { property: StyleProperty }) => {
         onClick: (event) => {
           if (event.altKey) {
             event.preventDefault();
-            deleteProperty(property);
+            deleteProperty(camelCasedProperty);
+            onReset?.();
             return;
           }
           setIsOpen(true);
@@ -284,13 +155,22 @@ const AdvancedPropertyLabel = ({ property }: { property: StyleProperty }) => {
           description={description}
           styles={[styleDecl]}
           onReset={() => {
-            deleteProperty(property);
+            deleteProperty(camelCasedProperty);
             setIsOpen(false);
+            onReset?.();
           }}
+          resetType="delete"
         />
       }
     >
-      <Label color={color} text="mono">
+      <Label
+        color={styleDecl.source.name}
+        text="mono"
+        css={{
+          backgroundColor: "transparent",
+          marginLeft: `-${initialIndentation}`,
+        }}
+      >
         {label}
       </Label>
     </Tooltip>
@@ -298,23 +178,27 @@ const AdvancedPropertyLabel = ({ property }: { property: StyleProperty }) => {
 };
 
 const AdvancedPropertyValue = ({
-  autoFocus,
   property,
+  onChangeComplete,
+  onReset,
+  inputRef: inputRefProp,
 }: {
-  autoFocus?: boolean;
-  property: StyleProperty;
+  property: CssProperty;
+  onChangeComplete: ComponentProps<
+    typeof CssValueInputContainer
+  >["onChangeComplete"];
+  onReset: ComponentProps<typeof CssValueInputContainer>["onReset"];
+  inputRef?: RefObject<HTMLInputElement>;
 }) => {
-  const styleDecl = useComputedStyleDecl(property);
+  // @todo conversion should be removed once data is in dash case
+  const camelCasedProperty = camelCaseProperty(property);
+  const styleDecl = useComputedStyleDecl(camelCasedProperty);
   const inputRef = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (autoFocus) {
-      inputRef.current?.focus();
-    }
-  }, [autoFocus]);
   const isColor = colord(toValue(styleDecl.usedValue)).isValid();
+
   return (
     <CssValueInputContainer
-      inputRef={inputRef}
+      inputRef={mergeRefs(inputRef, inputRefProp)}
       variant="chromeless"
       text="mono"
       fieldSizing="content"
@@ -325,21 +209,21 @@ const AdvancedPropertyValue = ({
             onChange={(styleValue) => {
               const options = { isEphemeral: true, listed: true };
               if (styleValue) {
-                setProperty(property)(styleValue, options);
+                setProperty(camelCasedProperty)(styleValue, options);
               } else {
-                deleteProperty(property, options);
+                deleteProperty(camelCasedProperty, options);
               }
             }}
             onChangeComplete={(styleValue) => {
-              setProperty(property)(styleValue);
+              setProperty(camelCasedProperty)(styleValue);
             }}
           />
         )
       }
-      property={property}
+      property={camelCasedProperty}
       styleSource={styleDecl.source.name}
       getOptions={() => [
-        ...styleConfigByName(property).items.map((item) => ({
+        ...styleConfigByName(camelCasedProperty).items.map((item) => ({
           type: "keyword" as const,
           value: item.name,
         })),
@@ -351,136 +235,123 @@ const AdvancedPropertyValue = ({
           styleValue.type === "keyword" &&
           styleValue.value.startsWith("--")
         ) {
-          setProperty(property)(
+          setProperty(camelCasedProperty)(
             { type: "var", value: styleValue.value.slice(2) },
             { ...options, listed: true }
           );
         } else {
-          setProperty(property)(styleValue, { ...options, listed: true });
+          setProperty(camelCasedProperty)(styleValue, {
+            ...options,
+            listed: true,
+          });
         }
       }}
       deleteProperty={deleteProperty}
+      onChangeComplete={onChangeComplete}
+      onReset={onReset}
     />
   );
 };
-
-const initialProperties = new Set<StyleProperty>([
-  "userSelect",
-  "pointerEvents",
-  "mixBlendMode",
-  "cursor",
-  "opacity",
-]);
-
-const $advancedProperties = computed(
-  [
-    // prevent showing properties inherited from root
-    // to not bloat advanced panel
-    $selectedInstancePath,
-    $registeredComponentMetas,
-    $styleSourceSelections,
-    $matchingBreakpoints,
-    $styles,
-  ],
-  (instancePath, metas, styleSourceSelections, matchingBreakpoints, styles) => {
-    if (instancePath === undefined) {
-      return [];
-    }
-    const definedStyles = getDefinedStyles({
-      instancePath,
-      metas,
-      matchingBreakpoints,
-      styleSourceSelections,
-      styles,
-    });
-    // All properties used by the panels except the advanced panel
-    const baseProperties = new Set<StyleProperty>([]);
-    for (const { properties } of sections.values()) {
-      for (const property of properties) {
-        baseProperties.add(property);
-      }
-    }
-    const advancedProperties = new Set<StyleProperty>(initialProperties);
-    for (const { property, listed } of definedStyles) {
-      // exclude properties from style panel UI unless edited in advanced section
-      if (baseProperties.has(property) === false || listed) {
-        advancedProperties.add(property);
-      }
-    }
-    return Array.from(advancedProperties).reverse();
-  }
-);
 
 /**
  * The Advanced section in the Style Panel on </> Global Root has performance issues.
  * To fix this, we skip rendering properties not visible in the viewport using the contentvisibilityautostatechange event,
  * and the contentVisibility and containIntrinsicSize CSS properties.
  */
-const AdvancedProperty = memo(
+const LazyRender = ({ children }: ComponentProps<"div">) => {
+  const visibilityChangeEventSupported = useClientSupports(
+    () => "oncontentvisibilityautostatechange" in document.body
+  );
+  const ref = useRef<HTMLDivElement>(null);
+  const [isVisible, setIsVisible] = useState(!visibilityChangeEventSupported);
+
+  useEffect(() => {
+    if (!visibilityChangeEventSupported) {
+      return;
+    }
+
+    if (ref.current == null) {
+      return;
+    }
+
+    const controller = new AbortController();
+
+    ref.current.addEventListener(
+      "contentvisibilityautostatechange",
+      (event) => {
+        setIsVisible(!event.skipped);
+      },
+      {
+        signal: controller.signal,
+      }
+    );
+
+    return () => {
+      controller.abort();
+    };
+  }, [visibilityChangeEventSupported]);
+
+  return (
+    <div
+      ref={ref}
+      style={{
+        display: "inline-block",
+        contentVisibility: "auto",
+        // https://developer.mozilla.org/en-US/docs/Web/CSS/contain-intrinsic-size
+        // containIntrinsicSize is used to set the default size of an element before any content is loaded.
+        // This helps in preventing layout shifts and provides a better user experience by maintaining a consistent layout.
+        // It also affects the contentvisibilityautostatechange event to be called properly,
+        // with "auto" it will call it with skipped false for all initial elements.
+        // 44px is the height of the property row with 2 lines of text. This value can be adjusted slightly.
+        containIntrinsicSize: "auto 44px",
+      }}
+    >
+      {isVisible ? children : undefined}
+    </div>
+  );
+};
+
+const AdvancedDeclarationLonghand = memo(
   ({
     property,
-    autoFocus,
+    onChangeComplete,
+    onReset,
+    valueInputRef,
+    indentation = initialIndentation,
   }: {
-    property: StyleProperty;
-    autoFocus: boolean;
+    property: CssProperty;
+    indentation?: string;
+    onReset?: () => void;
+    onChangeComplete?: ComponentProps<
+      typeof CssValueInputContainer
+    >["onChangeComplete"];
+    valueInputRef?: RefObject<HTMLInputElement>;
   }) => {
-    const visibilityChangeEventSupported = useClientSupports(
-      () => "oncontentvisibilityautostatechange" in document.body
-    );
-    const ref = useRef<HTMLDivElement>(null);
-    const [isVisible, setIsVisible] = useState(!visibilityChangeEventSupported);
-
-    useEffect(() => {
-      if (!visibilityChangeEventSupported) {
-        return;
-      }
-
-      if (ref.current == null) {
-        return;
-      }
-
-      const controller = new AbortController();
-
-      ref.current.addEventListener(
-        "contentvisibilityautostatechange",
-        (event) => {
-          setIsVisible(!event.skipped);
-        },
-        {
-          signal: controller.signal,
-        }
-      );
-
-      return () => {
-        controller.abort();
-      };
-    }, [visibilityChangeEventSupported]);
-
     return (
       <Flex
-        ref={ref}
-        css={{
-          contentVisibility: "auto",
-          // https://developer.mozilla.org/en-US/docs/Web/CSS/contain-intrinsic-size
-          // containIntrinsicSize is used to set the default size of an element before any content is loaded.
-          // This helps in preventing layout shifts and provides a better user experience by maintaining a consistent layout.
-          // It also affects the contentvisibilityautostatechange event to be called properly,
-          // with "auto" it will call it with skipped false for all initial elements.
-          // 44px is the height of the property row with 2 lines of text. This value can be adjusted slightly.
-          containIntrinsicSize: "auto 44px",
-        }}
-        key={property}
+        css={{ paddingLeft: indentation }}
         wrap="wrap"
         align="center"
         justify="start"
+        {...{ [copyAttribute]: property }}
       >
-        {isVisible && (
-          <>
-            <AdvancedPropertyLabel property={property} />
-            <Text>:</Text>
-            <AdvancedPropertyValue autoFocus={autoFocus} property={property} />
-          </>
-        )}
+        <AdvancedPropertyLabel property={property} onReset={onReset} />
+        <Text
+          variant="mono"
+          // Improves the visual separation of value from the property.
+          css={{
+            textIndent: "-0.5ch",
+            fontWeight: "bold",
+          }}
+        >
+          :
+        </Text>
+        <AdvancedPropertyValue
+          property={property}
+          onChangeComplete={onChangeComplete}
+          onReset={onReset}
+          inputRef={valueInputRef}
+        />
       </Flex>
     );
   }
@@ -488,38 +359,200 @@ const AdvancedProperty = memo(
 
 export const Section = () => {
   const [isAdding, setIsAdding] = useState(false);
-  const advancedProperties = useStore($advancedProperties);
-  const newlyAddedProperty = useRef<undefined | StyleProperty>(undefined);
+  const advancedStyles = useStore($advancedStylesLonghands);
+  const selectedInstanceKey = useStore($selectedInstanceKey);
+  // Memorizing recent properties by instance id, so that when user switches between instances and comes back
+  // they are still in-place
+  const [recentPropertiesMap, setRecentPropertiesMap] = useState<
+    Map<string, Array<CssProperty>>
+  >(new Map());
+  const addPropertyInputRef = useRef<HTMLInputElement>(null);
+  const recentValueInputRef = useRef<HTMLInputElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const [searchProperties, setSearchProperties] =
+    useState<Array<CssProperty>>();
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [minHeight, setMinHeight] = useState<number>(0);
+
+  const advancedProperties = Array.from(
+    advancedStyles.keys()
+  ) as Array<CssProperty>;
+
+  const recentProperties = selectedInstanceKey
+    ? (recentPropertiesMap.get(selectedInstanceKey) ?? [])
+    : [];
+
+  const currentProperties =
+    searchProperties ??
+    advancedProperties.filter(
+      (property) => recentProperties.includes(property) === false
+    );
+
+  const showRecentProperties =
+    recentProperties.length > 0 && searchProperties === undefined;
+
+  const memorizeMinHeight = () => {
+    setMinHeight(containerRef.current?.getBoundingClientRect().height ?? 0);
+  };
+
+  const updateRecentProperties = (properties: Array<CssProperty>) => {
+    if (selectedInstanceKey === undefined) {
+      return;
+    }
+    const newRecentPropertiesMap = new Map(recentPropertiesMap);
+    newRecentPropertiesMap.set(
+      selectedInstanceKey,
+      Array.from(new Set(properties))
+    );
+    setRecentPropertiesMap(newRecentPropertiesMap);
+  };
+
+  const handleInsertStyles = (cssText: string) => {
+    const styleMap = insertStyles(cssText);
+    const insertedProperties = Array.from(
+      styleMap.keys()
+    ) as Array<CssProperty>;
+    updateRecentProperties([...recentProperties, ...insertedProperties]);
+    return styleMap;
+  };
+
+  const handleShowAddStyleInput = () => {
+    flushSync(() => {
+      setIsAdding(true);
+    });
+    // User can click twice on the add button, so we need to focus the input on the second click after autoFocus isn't working.
+    addPropertyInputRef.current?.focus();
+  };
+
+  const handleAbortSearch = () => {
+    setMinHeight(0);
+    setSearchProperties(undefined);
+  };
+
+  const handleSearch = (event: ChangeEvent<HTMLInputElement>) => {
+    const search = event.target.value.trim();
+    if (search === "") {
+      return handleAbortSearch();
+    }
+    // This is not needed in advanced mode because the input won't jump there as it is on top
+    if ($settings.get().stylePanelMode !== "advanced") {
+      memorizeMinHeight();
+    }
+
+    const styles = [];
+    for (const [property, value] of advancedStyles) {
+      styles.push({ property, value: toValue(value) });
+    }
+
+    const matched = matchSorter(styles, search, {
+      keys: ["property", "value"],
+    }).map(({ property }) => property);
+
+    setSearchProperties(matched as CssProperty[]);
+  };
+
+  const afterAddingStyles = () => {
+    setIsAdding(false);
+    requestAnimationFrame(() => {
+      // We are either focusing the last value input from the recent list if available or the search input.
+      const element = recentValueInputRef.current ?? searchInputRef.current;
+      element?.focus();
+      element?.select();
+    });
+  };
 
   return (
     <AdvancedStyleSection
       label="Advanced"
       properties={advancedProperties}
-      onAdd={() => setIsAdding(true)}
+      onAdd={handleShowAddStyleInput}
     >
-      {isAdding && (
-        <AdvancedSearch
-          usedProperties={advancedProperties}
-          onSelect={(property) => {
-            newlyAddedProperty.current = property;
-            setIsAdding(false);
-            setProperty(property)(
-              { type: "guaranteedInvalid" },
-              { listed: true }
-            );
-          }}
-          onClose={() => setIsAdding(false)}
+      <Box css={{ paddingInline: theme.panel.paddingInline }}>
+        <SearchField
+          inputRef={searchInputRef}
+          onChange={handleSearch}
+          onAbort={handleAbortSearch}
         />
-      )}
-      <Box>
-        {advancedProperties.map((property) => (
-          <AdvancedProperty
-            key={property}
-            property={property}
-            autoFocus={newlyAddedProperty.current === property}
-          />
-        ))}
       </Box>
+      <CopyPasteMenu
+        onPaste={handleInsertStyles}
+        properties={currentProperties}
+      >
+        <Flex gap="2" direction="column">
+          <Flex
+            direction="column"
+            css={{ paddingInline: theme.panel.paddingInline, gap: 2 }}
+          >
+            {showRecentProperties &&
+              recentProperties.map((property, index, properties) => {
+                const isLast = index === properties.length - 1;
+                return (
+                  <AdvancedDeclarationLonghand
+                    key={property}
+                    valueInputRef={isLast ? recentValueInputRef : undefined}
+                    property={property}
+                    onChangeComplete={(event) => {
+                      if (event.type === "enter") {
+                        handleShowAddStyleInput();
+                      }
+                    }}
+                    onReset={() => {
+                      updateRecentProperties(
+                        recentProperties.filter(
+                          (recentProperty) => recentProperty !== property
+                        )
+                      );
+                    }}
+                  />
+                );
+              })}
+            {(showRecentProperties || isAdding) && (
+              <Box
+                css={
+                  isAdding
+                    ? { paddingTop: theme.spacing[3] }
+                    : // We hide it visually so you can tab into it to get shown.
+                      { overflow: "hidden", height: 0 }
+                }
+              >
+                <AddStyleInput
+                  onSubmit={(cssText: string) => {
+                    const styles = handleInsertStyles(cssText);
+                    if (styles.size > 0) {
+                      afterAddingStyles();
+                    }
+                  }}
+                  onClose={afterAddingStyles}
+                  onFocus={() => {
+                    if (isAdding === false) {
+                      handleShowAddStyleInput();
+                    }
+                  }}
+                  onBlur={() => {
+                    setIsAdding(false);
+                  }}
+                  ref={addPropertyInputRef}
+                />
+              </Box>
+            )}
+          </Flex>
+          {showRecentProperties && <Separator />}
+          <Flex
+            direction="column"
+            css={{ paddingInline: theme.panel.paddingInline, gap: 2 }}
+            style={{ minHeight }}
+            ref={containerRef}
+          >
+            {currentProperties.map((property) => {
+              return (
+                <LazyRender key={property}>
+                  <AdvancedDeclarationLonghand property={property} />
+                </LazyRender>
+              );
+            })}
+          </Flex>
+        </Flex>
+      </CopyPasteMenu>
     </AdvancedStyleSection>
   );
 };

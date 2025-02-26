@@ -43,7 +43,7 @@ export const StyleSection = (props: {
   children: ReactNode;
 }) => {
   const { label, children, properties, fullWidth } = props;
-  const [isOpen, setIsOpen] = useOpenState(props);
+  const [isOpen, setIsOpen] = useOpenState(label);
   const styles = useComputedStyles(properties);
   return (
     <CollapsibleSectionRoot
@@ -72,7 +72,7 @@ export const RepeatedStyleSection = (props: {
 }) => {
   const { label, description, children, properties, onAdd, collapsible } =
     props;
-  const [isOpen, setIsOpen] = useOpenState(props);
+  const [isOpen, setIsOpen] = useOpenState(label);
   const styles = useComputedStyles(properties);
   const dots = getDots(styles);
 

@@ -3,8 +3,8 @@
   "include": [
     "src",
     "../../@types/**/scroll-timeline.d.ts",
-    "private-src/scroll.stories.tsx",
-    "private-src/scroll.tsx"
+    "private-src",
+    "../sdk/src/schema/animation-schema.ts"
   ],
   "compilerOptions": {
     "types": ["react/experimental", "react-dom/experimental", "@types/node"]

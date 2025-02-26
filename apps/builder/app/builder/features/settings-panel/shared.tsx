@@ -14,6 +14,8 @@ import equal from "fast-deep-equal";
 import {
   decodeDataSourceVariable,
   encodeDataSourceVariable,
+  SYSTEM_VARIABLE_ID,
+  systemParameter,
 } from "@webstudio-is/sdk";
 import type { PropMeta, Prop, Asset } from "@webstudio-is/sdk";
 import { InfoCircleIcon, MinusIcon } from "@webstudio-is/icons";
@@ -36,7 +38,7 @@ import {
 } from "~/shared/nano-states";
 import type { BindingVariant } from "~/builder/shared/binding-popover";
 import { humanizeString } from "~/shared/string-utils";
-import { $selectedInstanceKey } from "~/shared/awareness";
+import { $selectedInstanceKeyWithRoot } from "~/shared/awareness";
 
 export type PropValue =
   | { type: "number"; value: number }
@@ -47,7 +49,11 @@ export type PropValue =
   | { type: "expression"; value: string }
   | { type: "asset"; value: Asset["id"] }
   | { type: "page"; value: Extract<Prop, { type: "page" }>["value"] }
-  | { type: "action"; value: Extract<Prop, { type: "action" }>["value"] };
+  | { type: "action"; value: Extract<Prop, { type: "action" }>["value"] }
+  | {
+      type: "animationAction";
+      value: Extract<Prop, { type: "animationAction" }>["value"];
+    };
 
 // Weird code is to make type distributive
 // https://www.typescriptlang.org/docs/handbook/2/conditional-types.html#distributive-conditional-types
@@ -314,7 +320,11 @@ export const Row = ({
 );
 
 export const $selectedInstanceScope = computed(
-  [$selectedInstanceKey, $variableValuesByInstanceSelector, $dataSources],
+  [
+    $selectedInstanceKeyWithRoot,
+    $variableValuesByInstanceSelector,
+    $dataSources,
+  ],
   (instanceKey, variableValuesByInstanceSelector, dataSources) => {
     const scope: Record<string, unknown> = {};
     const aliases = new Map<string, string>();
@@ -324,7 +334,10 @@ export const $selectedInstanceScope = computed(
     const values = variableValuesByInstanceSelector.get(instanceKey);
     if (values) {
       for (const [dataSourceId, value] of values) {
-        const dataSource = dataSources.get(dataSourceId);
+        let dataSource = dataSources.get(dataSourceId);
+        if (dataSourceId === SYSTEM_VARIABLE_ID) {
+          dataSource = systemParameter;
+        }
         if (dataSource === undefined) {
           continue;
         }

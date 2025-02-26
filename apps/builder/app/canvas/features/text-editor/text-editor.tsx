@@ -89,6 +89,7 @@ import { setDataCollapsed } from "~/canvas/collapsed";
 import {
   $selectedPage,
   addTemporaryInstance,
+  getInstancePath,
   selectInstance,
 } from "~/shared/awareness";
 import { shallowEqual } from "shallow-equal";
@@ -96,7 +97,6 @@ import {
   insertListItemAt,
   insertTemplateAt,
 } from "~/builder/features/workspace/canvas-tools/outline/block-utils";
-import { editablePlaceholderComponents } from "~/canvas/shared/styles";
 
 const BindInstanceToNodePlugin = ({
   refs,
@@ -1044,7 +1044,10 @@ const RichTextContentPluginInternal = ({
 
           if (blockChildSelector) {
             updateWebstudioData((data) => {
-              deleteInstanceMutable(data, rootInstanceSelector);
+              deleteInstanceMutable(
+                data,
+                getInstancePath(rootInstanceSelector, data.instances)
+              );
             });
           }
         }
@@ -1113,7 +1116,10 @@ const RichTextContentPluginInternal = ({
               updateWebstudioData((data) => {
                 deleteInstanceMutable(
                   data,
-                  isLastChild ? parentInstanceSelector : rootInstanceSelector
+                  getInstancePath(
+                    isLastChild ? parentInstanceSelector : rootInstanceSelector,
+                    data.instances
+                  )
                 );
               });
 
@@ -1128,7 +1134,10 @@ const RichTextContentPluginInternal = ({
               onNext(editor.getEditorState(), { reason: "left" });
 
               updateWebstudioData((data) => {
-                deleteInstanceMutable(data, blockChildSelector);
+                deleteInstanceMutable(
+                  data,
+                  getInstancePath(blockChildSelector, data.instances)
+                );
               });
 
               event.preventDefault();
@@ -1218,7 +1227,12 @@ const RichTextContentPluginInternal = ({
                 updateWebstudioData((data) => {
                   deleteInstanceMutable(
                     data,
-                    isLastChild ? parentInstanceSelector : rootInstanceSelector
+                    getInstancePath(
+                      isLastChild
+                        ? parentInstanceSelector
+                        : rootInstanceSelector,
+                      data.instances
+                    )
                   );
                 });
               }
@@ -1565,6 +1579,7 @@ export const TextEditor = ({
   const handleNext = useEffectEvent(
     (state: EditorState, args: HandleNextParams) => {
       const rootInstanceId = $selectedPage.get()?.rootInstanceId;
+      const metas = $registeredComponentMetas.get();
 
       if (rootInstanceId === undefined) {
         return;
@@ -1574,7 +1589,7 @@ export const TextEditor = ({
       findAllEditableInstanceSelector(
         [rootInstanceId],
         instances,
-        $registeredComponentMetas.get(),
+        metas,
         editableInstanceSelectors
       );
 
@@ -1623,14 +1638,12 @@ export const TextEditor = ({
         if (instance === undefined) {
           continue;
         }
-
-        // Components with pseudo-elements (e.g., ::marker) that prevent content from collapsing
-        const componentsWithPseudoElementChildren =
-          editablePlaceholderComponents;
+        const meta = metas.get(instance.component);
 
         // opinionated: Non-collapsed elements without children can act as spacers (they have size for some reason).
         if (
-          !componentsWithPseudoElementChildren.includes(instance.component) &&
+          // Components with pseudo-elements (e.g., ::marker) that prevent content from collapsing
+          meta?.placeholder === undefined &&
           instance?.children.length === 0
         ) {
           const elt = getElementByInstanceSelector(nextSelector);
