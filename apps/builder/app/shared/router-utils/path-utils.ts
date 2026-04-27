@@ -1,5 +1,4 @@
 import type { AUTH_PROVIDERS } from "~/shared/session";
-import { publicStaticEnv } from "~/env/env.static";
 import { getAuthorizationServerOrigin } from "./origins";
 import type { BuilderMode } from "../nano-states/misc";
 
@@ -158,17 +157,8 @@ export const restAssetsUploadPath = ({
   return `/rest/assets/${name}`;
 };
 
-export const restPatchPath = () => {
-  const urlSearchParams = new URLSearchParams();
-
-  urlSearchParams.set("client-version", publicStaticEnv.VERSION);
-
-  const urlSearchParamsString = urlSearchParams.toString();
-
-  return `/rest/patch${
-    urlSearchParamsString ? `?${urlSearchParamsString}` : ""
-  }`;
-};
+export const restBuildVersionPath = (buildId: string) =>
+  `/rest/build-version?buildId=${encodeURIComponent(buildId)}`;
 
 export const getCanvasUrl = () => {
   return `/canvas`;
